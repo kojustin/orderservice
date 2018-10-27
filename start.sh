@@ -13,14 +13,38 @@ dbname=orders.db
 # Name of the Docker container that runs the service.
 cname=the_server
 
-# Install apt packages.
+# Install apt packages, find all missing packages and then install in a single
+# batch operation.
+if ! pkglist=$(apt list --installed 2>/dev/null); then
+  echo "Unable to lookup installed packages"
+  exit 1
+fi
+pkgstoinstall=()
 for pkg in tmux make gcc sqlite3; do
   # Check for existence of package. The trailing "/" on the package name causes
   # a match for the exact package name.
-  if ! apt list --installed 2>/dev/null | grep "$pkg/" --silent; then
-    sudo apt install --yes "$pkg"
+  if ! echo "$pkglist" | grep "$pkg/" --silent; then
+    pkgstoinstall+=("$pkg")
   fi
 done
+if [[ -n "${pkgstoinstall[*]}" ]]; then
+  sudo apt install --yes "${pkgstoinstall[@]}"
+fi
+
+cat <<EOF > ~/.tmux.conf
+# tmux configuration
+
+# Enable mouse
+set-option -g mouse on
+
+# Set vi mode copy-paste mode
+set-window-option -g mode-keys vi
+bind-key -T copy-mode-vi 'v' send-keys -X begin-selection
+bind-key -T copy-mode-vi 'y' send-keys -X copy-selection-and-cancel
+
+# Colors
+set -g default-terminal "screen-256color"
+EOF
 
 # If Go is not installed, install it.
 #
@@ -81,11 +105,13 @@ sqlite3 "$dbname" < schema.sql
 # If the container is running, kill it.
 if docker container list | grep --silent "$cname"; then
   docker stop -t 0 "$cname" > /dev/null
+  docker rm "$cname" > /dev/null
 fi
 
-# Run the built image.
-opts=(--env GOOGLE_MAPS_API_KEY --detach --interactive --tty --rm --publish 8080:8080 --name "$cname")
-opts+=(--mount "type=bind,source=$(pwd)/$dbname,target=/data/$dbname")
+# Run the Docker image.
+opts=(--env GOOGLE_MAPS_API_KEY --restart on-failure:1 --detach --interactive --tty)
+opts+=(--mount "type=bind,source=$(pwd)/$dbname,target=/data/$dbname"--rm)
+opts+=(--publish 8080:8080 --name "$cname")
 
 cmd="docker run ${opts[*]} $(cat "$target")"
 $cmd
