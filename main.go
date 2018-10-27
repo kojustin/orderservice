@@ -259,16 +259,16 @@ func orderServiceMain() error {
 	signal.Notify(c, os.Interrupt)
 
 	var (
-		dbname = flag.String("dbname", "", "Path to database")
+		dbpath = flag.String("dbpath", "", "Path to database")
 	)
 	flag.Parse()
 
-	if *dbname == "" {
+	if *dbpath == "" {
 		return fmt.Errorf("missing db name")
 	}
-	db, err := sql.Open("sqlite3", *dbname)
+	db, err := sql.Open("sqlite3", *dbpath)
 	if err != nil {
-		return fmt.Errorf("failed to open sqlite3 database (%s) : %s", *dbname, err)
+		return fmt.Errorf("failed to open sqlite3 database (%s) : %s", *dbpath, err)
 	}
 	fmt.Printf("opened db.\n")
 	defer db.Close()
