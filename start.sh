@@ -13,23 +13,9 @@ dbpath=artifacts/orders.db
 # Name of the Docker container that runs the service.
 cname=ordersvc
 
-# Install apt packages, find all missing packages and then install in a single
-# batch operation.
-if ! pkglist=$(apt list --installed 2>/dev/null); then
-  echo "Unable to lookup installed packages"
-  exit 1
-fi
-pkgstoinstall=()
-for pkg in tmux make gcc sqlite3 jq; do
-  # Check for existence of package. The trailing "/" on the package name causes
-  # a match for the exact package name.
-  if ! echo "$pkglist" | grep "$pkg/" --silent; then
-    pkgstoinstall+=("$pkg")
-  fi
-done
-if [[ -n "${pkgstoinstall[*]}" ]]; then
-  sudo apt install --yes "${pkgstoinstall[@]}"
-fi
+# Install apt packages.
+sudo apt-get update
+sudo apt install --yes gcc jq make sqlite3 tmux
 
 cat <<EOF > ~/.tmux.conf
 # tmux configuration
