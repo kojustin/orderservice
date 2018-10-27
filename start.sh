@@ -11,7 +11,7 @@ set -o pipefail
 # Filename of the sqlite3 database file.
 dbpath=artifacts/orders.db
 # Name of the Docker container that runs the service.
-cname=the_server
+cname=ordersvc
 
 # Install apt packages, find all missing packages and then install in a single
 # batch operation.
@@ -20,7 +20,7 @@ if ! pkglist=$(apt list --installed 2>/dev/null); then
   exit 1
 fi
 pkgstoinstall=()
-for pkg in tmux make gcc sqlite3; do
+for pkg in tmux make gcc sqlite3 jq; do
   # Check for existence of package. The trailing "/" on the package name causes
   # a match for the exact package name.
   if ! echo "$pkglist" | grep "$pkg/" --silent; then
@@ -49,7 +49,8 @@ EOF
 # If Go is not installed, install it.
 #
 # The PATH environment variable is updated in ~/.bash_profile to include the
-# path to the go binary. Make sure to include it if this path exists.
+# path to the go binary. Make sure to include it if this path exists. This is
+# required to add go to the PATH, if it exists.
 if [[ -f  ~/.bash_profile ]]; then
   # shellcheck source=/dev/null
   source ~/.bash_profile
@@ -104,17 +105,19 @@ make "$dbpath"
 
 # If the container is running, kill it.
 if docker container list --all | grep --silent "$cname"; then
-  docker stop -t 0 "$cname" > /dev/null
-  docker rm "$cname" > /dev/null
+  docker rm -f "$cname" > /dev/null
 fi
 
 #
 # Run the Docker image.
 #
+if [[ -z "$GOOGLE_MAPS_API_KEY" ]]; then
+  echo "ERROR: GOOGLE_MAPS_API_KEY is unset, application will not work."
+  exit 1
+fi
 
 dbbasename="$(basename $dbpath)"
 internalpath="/data/$dbbasename"
-
 opts=(--env GOOGLE_MAPS_API_KEY --detach --interactive --tty)
 opts+=(--mount "type=bind,source=$(pwd)/$dbpath,target=$internalpath" --rm)
 opts+=(--publish 8080:8080 --name "$cname")

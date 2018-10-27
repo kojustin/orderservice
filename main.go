@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -20,10 +21,15 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// HTTPResponseError is the common error response orderservice replies with to
+// HTTPResponseError is the common error response OrderService replies with to
 // its callers on errors
 type HTTPResponseError struct {
 	Error string `json:"error"`
+}
+
+// HTTPResponseStatus is a response to some calls.
+type HTTPResponseStatus struct {
+	Status string `json:"status"`
 }
 
 // CreateOrderDetails is the request body for a create order request.
@@ -67,9 +73,10 @@ type Order struct {
 
 // OrderService is a net/http.Handler that deals with orders.
 type OrderService struct {
-	mapsAPIKey string // Google Maps API Key, SECRET
-	*http.ServeMux    // Embedded HTTP server object, implements http.Handler.
-	*sql.DB           // Embedded SQL database connection.
+	mapsAPIKey      string // Google Maps API Key, SECRET
+	*http.ServeMux         // Embedded HTTP server object, implements http.Handler.
+	*sql.DB                // Embedded SQL database connection.
+	context.Context        // Context for cancelling and stuff.
 }
 
 // Insert adds a new entry to the database. origin and destination must be
@@ -127,7 +134,7 @@ func (s *OrderService) List(page int, limit int) ([]Order, error) {
 	}
 	defer rows.Close()
 
-	orders := []Order{}
+	var orders []Order
 
 	for rows.Next() {
 		var id int64
@@ -139,9 +146,9 @@ func (s *OrderService) List(page int, limit int) ([]Order, error) {
 			return nil, fmt.Errorf("row.Scan() failed: %s", err)
 		}
 		switch status {
-		case "TAKEN":
+		case string(StateTaken):
 			orders = append(orders, Order{Id: id, Distance: distance, State: StateTaken})
-		case "INITAL":
+		case string(StateUnassigned):
 			orders = append(orders, Order{Id: id, Distance: distance, State: StateUnassigned})
 		default:
 			return nil, fmt.Errorf("found unknonwn status %s", status)
@@ -151,16 +158,124 @@ func (s *OrderService) List(page int, limit int) ([]Order, error) {
 	return orders, nil
 }
 
+var (
+	errTaken       = fmt.Errorf("already taken")
+	errNoSuchOrder = fmt.Errorf("no such order")
+)
+
+// Take marks an order as taken. Returns errTaken if the order exists and has
+// already been taken. Returns errNoSuchOrder if no such order exists. May
+// return other errors.
+func (s *OrderService) Take(orderID int64) error {
+	ctx, cancelFn := context.WithTimeout(s.Context, 2*time.Second)
+	defer cancelFn()
+
+	var (
+		err  error
+		rows *sql.Rows
+		tx   *sql.Tx
+	)
+
+	tx, err = s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed at BeginTx: %s", err)
+	}
+	defer func() {
+		if err == nil {
+			tx.Commit()
+		} else {
+			tx.Rollback()
+		}
+	}()
+
+	rows, err = tx.Query("SELECT (status) FROM orders where id == ?", orderID)
+	if err != nil {
+		return fmt.Errorf("unable to query for order ID: %s", err)
+	}
+	if rows.Next() == false {
+		err = errNoSuchOrder
+		return errNoSuchOrder
+	}
+	var status string
+	err = rows.Scan(&status)
+	if err != nil {
+		err = fmt.Errorf("row.Scan() failed: %s", err)
+		return err
+	}
+
+	if status != string(StateUnassigned) {
+		err = errTaken
+		return err
+	}
+	_, err = tx.Exec("UPDATE orders SET status = ? WHERE id = ?", string(StateTaken), orderID)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // NOOP assignment that verifies interface implementation.
 var _ http.Handler = &OrderService{}
 
 // NewOrderService creates a new OrderService object, registers handlers.
-func NewOrderService(db *sql.DB, mapsAPIKey string) (*OrderService, error) {
+func NewOrderService(db *sql.DB, mapsAPIKey string, ctx context.Context) (*OrderService, error) {
 	mux := http.NewServeMux()
-	orderService := &OrderService{mapsAPIKey: mapsAPIKey, ServeMux: mux, DB: db}
+	orderService := &OrderService{mapsAPIKey: mapsAPIKey, ServeMux: mux, DB: db, Context: ctx}
+
+	patchPathRE, err := regexp.Compile("^/orders/(?P<orderID>[[:digit:]]*)$")
+	if err != nil {
+		return nil, fmt.Errorf("unable to compile patchPathRE: %s", err)
+	}
+
+	mux.HandleFunc("/orders/", func(w http.ResponseWriter, req *http.Request) {
+		fmt.Printf("req.URL.Path:%s, RequestURI:%s; method=%s\n", req.URL.Path, req.RequestURI, req.Method)
+
+		if req.Method != "PATCH" {
+			// Allow only PATCH. Otherwise, return 405 Method Not Allowed
+			w.WriteHeader(405)
+			return
+		}
+
+		matches := patchPathRE.FindStringSubmatch(req.URL.Path)
+		if len(matches) != 2 {
+			// Only allow URLS like "/orders/ID" where ID is an integer.
+			// Otherwise, return 404 not found.
+			w.WriteHeader(404)
+			return
+		}
+		orderID, err := strconv.ParseInt(matches[1], 10, 64)
+		if err != nil {
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(HTTPResponseError{"INVALID ID"})
+			return
+		}
+		switch err = orderService.Take(orderID); err {
+		case errNoSuchOrder:
+			w.WriteHeader(404)
+			return
+		case errTaken:
+			w.WriteHeader(409)
+			json.NewEncoder(w).Encode(HTTPResponseError{"ORDER_ALREADY_BEEN_TAKEN"})
+			return
+		case nil:
+			json.NewEncoder(w).Encode(HTTPResponseStatus{"SUCCESS"})
+			return
+		default:
+			fmt.Fprintf(os.Stderr, "failed orderService.Take() id=%d; err=%s", orderID, err)
+			w.WriteHeader(500)
+			json.NewEncoder(w).Encode(HTTPResponseError{"INTERNAL_ERROR"})
+			return
+		}
+	})
 
 	mux.HandleFunc("/orders", func(w http.ResponseWriter, req *http.Request) {
 		fmt.Printf("req.URL.Path:%s, RequestURI:%s; method=%s\n", req.URL.Path, req.RequestURI, req.Method)
+
+		if req.URL.Path != "/orders" {
+			w.WriteHeader(404)
+			return
+		}
 
 		switch req.Method {
 		case "GET":
@@ -173,7 +288,7 @@ func NewOrderService(db *sql.DB, mapsAPIKey string) (*OrderService, error) {
 			}
 			orders, err := orderService.List(page, limit)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed orderService.List(): %s", err)
+				fmt.Fprintf(os.Stderr, "failed orderService.List(): %s\n", err)
 				w.WriteHeader(501)
 				json.NewEncoder(w).Encode(HTTPResponseError{Error: "INTERNAL_FAILURE"})
 				return
@@ -184,8 +299,6 @@ func NewOrderService(db *sql.DB, mapsAPIKey string) (*OrderService, error) {
 		case "POST":
 			var buf bytes.Buffer
 			io.Copy(&buf, req.Body)
-			req.Body.Close()
-			fmt.Printf("post! bytes=%s\n", buf.String())
 
 			details, err := parseCreateOrderDetails(buf.String())
 			if err != nil {
@@ -195,7 +308,7 @@ func NewOrderService(db *sql.DB, mapsAPIKey string) (*OrderService, error) {
 			}
 			order, err := orderService.Insert(*details)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed orderService.Insert(): %s", err)
+				fmt.Fprintf(os.Stderr, "failed orderService.Insert(): %s\n", err)
 				w.WriteHeader(501)
 				json.NewEncoder(w).Encode(HTTPResponseError{Error: "INTERNAL_FAILURE"})
 				return
@@ -208,6 +321,12 @@ func NewOrderService(db *sql.DB, mapsAPIKey string) (*OrderService, error) {
 			return
 		}
 	})
+
+	// Default handler.
+	mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(400)
+	})
+
 	return orderService, nil
 }
 
@@ -259,6 +378,7 @@ func orderServiceMain() error {
 	signal.Notify(c, os.Interrupt)
 
 	var (
+		ctx    = context.Background()
 		dbpath = flag.String("dbpath", "", "Path to database")
 	)
 	flag.Parse()
@@ -281,7 +401,7 @@ func orderServiceMain() error {
 		return fmt.Errorf("environment variable GOOGLE_MAPS_API_KEY is empty")
 	}
 
-	orderService, err := NewOrderService(db, mapsAPIKey)
+	orderService, err := NewOrderService(db, mapsAPIKey, ctx)
 	if err != nil {
 		return fmt.Errorf("failed to create OrderService: %s", err)
 	}
@@ -290,8 +410,7 @@ func orderServiceMain() error {
 
 	go func() {
 		for _ = range c {
-			ctx, cancelFn := context.WithTimeout(context.Background(),
-				5*time.Second)
+			ctx, cancelFn := context.WithTimeout(ctx, 5*time.Second)
 			defer cancelFn()
 			server.Shutdown(ctx)
 		}
