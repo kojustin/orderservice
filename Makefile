@@ -1,10 +1,14 @@
 # Makefile
+#
+# Builds things.
 
 # Output directory, all build products go under here.
 OUTDIR:=artifacts
 
+# Make sure to use bash
 SHELL:=/bin/bash
 
+# Docker container name
 IMAGE_NAME:=kojustin-orderservice:latest
 
 # Default rule builds everything. In addition also re-builds the Docker image.
@@ -24,6 +28,10 @@ test: *.go Makefile
 # Build intermediate directories
 $(OUTDIR) $(OUTDIR)/containerize:
 	mkdir -p $@
+
+# Initialize database
+$(OUTDIR)/orders.db: schema.sql | $(OUTDIR)
+	sqlite3 $@ < schema.sql
 
 # Compile the binary, place it into the output directory.
 $(OUTDIR)/containerize/orderservice: *.go Makefile | $(OUTDIR)/containerize

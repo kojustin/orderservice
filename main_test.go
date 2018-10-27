@@ -59,7 +59,18 @@ const gmapsResponse = `{
   } ]
 }`
 
-func TestGoogleMapsResponseJSONParse(t *testing.T) {
+const createOrderDetails = `{
+  "origin": [
+    "37.8093475",
+    "-122.2740787"
+  ],
+  "destination": [
+    "37.8061044",
+    "-122.2943356"
+  ]
+}`
+
+func TestDeserializeGoogleMapsResponse(t *testing.T) {
 	var response GoogleMapsResponse
 	err := json.NewDecoder(strings.NewReader(gmapsResponse)).Decode(&response)
 	if err != nil {
@@ -78,4 +89,13 @@ func TestGoogleMapsResponseJSONParse(t *testing.T) {
 	if !reflect.DeepEqual(rowZero.Elements[0].Distance, distance1) {
 		t.Errorf("expected %+v, got %+v", distance1, rowZero.Elements[0])
 	}
+}
+
+func TestDeserializeCreateOrderDetails(t *testing.T) {
+	details, err := parseCreateOrderDetails(createOrderDetails)
+	if err != nil {
+		t.Errorf("parseCreateOrderDetails failed: %s", err)
+	}
+	t.Logf("details=%+v", details)
+
 }

@@ -9,7 +9,7 @@ set -e
 set -o pipefail
 
 # Filename of the sqlite3 database file.
-dbname=orders.db
+dbname=artifacts/orders.db
 # Name of the Docker container that runs the service.
 cname=the_server
 
@@ -100,10 +100,10 @@ target=artifacts/image_name.txt
 make "$target"
 
 # Create database file and populate it with inital schema.
-sqlite3 "$dbname" < schema.sql
+make "$dbname"
 
 # If the container is running, kill it.
-if docker container list | grep --silent "$cname"; then
+if docker container list --all | grep --silent "$cname"; then
   docker stop -t 0 "$cname" > /dev/null
   docker rm "$cname" > /dev/null
 fi
@@ -113,5 +113,5 @@ opts=(--env GOOGLE_MAPS_API_KEY --restart on-failure:1 --detach --interactive --
 opts+=(--mount "type=bind,source=$(pwd)/$dbname,target=/data/$dbname"--rm)
 opts+=(--publish 8080:8080 --name "$cname")
 
-cmd="docker run ${opts[*]} $(cat "$target")"
+cmd="docker run ${opts[*]} $(cat "$target") -dbname $dbname"
 $cmd

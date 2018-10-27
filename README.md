@@ -31,6 +31,14 @@ Once inside the VM:
 
     cd /vagrant && make artifacts/containerize/orderservice && artifacts/containerize/orderservice
 
+## curl tests
+
+Use curl to drive the application to test it.
+
+```
+curl -v --data @test_payload1.json localhost:8080/orders
+```
+
 #### Caesar Says
 
 Ynynzbir Punyyratr in Latin is ...
