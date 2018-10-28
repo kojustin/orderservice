@@ -45,10 +45,24 @@ if [[ -f  ~/.bash_profile ]]; then
   source ~/.bash_profile
 fi
 if ! command -v go >/dev/null; then
-  if [[ ! -f /tmp/go1.11.1.linux-amd64.tar.gz ]]; then
-    # Wrap cd in a shell so that the effect is localized.
-    (cd /tmp && curl -O -s https://dl.google.com/go/go1.11.1.linux-amd64.tar.gz)
-  fi
+  # Download the go 1.11 package and try up to three times, make sure to check
+  # the checksum.
+  # shellcheck disable=SC2034
+  for count in 1 2 3; do
+    if [[ ! -f /tmp/go1.11.1.linux-amd64.tar.gz ]]; then
+      # Wrap cd in a shell so that the effect is localized.
+      (cd /tmp && curl -O -s https://dl.google.com/go/go1.11.1.linux-amd64.tar.gz)
+    fi
+    expectedhash=2871270d8ff0c8c69f161aaae42f9f28739855ff5c5204752a8d92a1c9f63993
+    thesum=$(sha256sum /tmp/go1.11.1.linux-amd64.tar.gz | cut -f 1 -d ' ')
+    echo "the sum is $thesum"
+    if [[ "$thesum" != "$expectedhash" ]]; then
+      echo "sha256 mismatch expected $expectedhash, got $thesum."
+      rm /tmp/go1.11.1.linux-amd64.tar.gz
+    else
+      break
+    fi
+  done
   sudo tar -C /usr/local -xzf /tmp/go1.11.1.linux-amd64.tar.gz
 
   # Add go binary path and GOPATH/bin to PATH

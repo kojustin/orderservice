@@ -46,10 +46,6 @@ tests against the server.
     # In shell 2:
     go test -tags integ
 
-Line count
-
-    find . -type f  -not -path "./.git/*" -not -path "./.idea/*" -not -path "./.vagrant/*" -not -path "./artifacts/*" -not -name ubuntu-bionic-18.04-cloudimg-console.log | xargs wc -l
-
 #### Caesar Says
 
 Ynynzbir Punyyratr in Latin is ...
