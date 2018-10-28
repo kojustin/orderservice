@@ -17,6 +17,9 @@ cname=ordersvc
 sudo apt-get update
 sudo apt install --yes gcc jq make sqlite3 tmux
 
+# Make sure NTP is running.
+sudo systemctl start systemd-timesyncd
+
 cat <<EOF > ~/.tmux.conf
 # tmux configuration
 
@@ -104,9 +107,8 @@ fi
 
 dbbasename="$(basename $dbpath)"
 internalpath="/data/$dbbasename"
-opts=(--env GOOGLE_MAPS_API_KEY --detach --interactive --tty)
+opts=(--env GOOGLE_MAPS_API_KEY --detach --publish 8080:8080 --name "$cname")
 opts+=(--mount "type=bind,source=$(pwd)/$dbpath,target=$internalpath" --rm)
-opts+=(--publish 8080:8080 --name "$cname")
 
 cmd="docker run ${opts[*]} $(cat "$target") -dbpath $internalpath"
 $cmd

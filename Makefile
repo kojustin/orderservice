@@ -1,6 +1,6 @@
 # Makefile
 #
-# Builds things.
+# Build things.
 
 # Output directory, all build products go under here.
 OUTDIR:=artifacts
@@ -19,14 +19,17 @@ all: $(OUTDIR)/image_name.txt
 clean:
 	rm -rf $(OUTDIR)
 
+# This is the quick test. It runs some Go linting tools and then runs the unit
+# tests.
 .PHONY: test
 test: *.go Makefile
 	go vet
-	if [[ -n "$$(goimports -d .)" ]]; then echo "imports wrong!"; exit 1; fi
+	if [[ -n "$$(gofmt -d .)" ]]; then echo "ERROR! Needs gofmt!"; exit 1; fi
+	if [[ -n "$$(goimports -d .)" ]]; then echo "ERROR! Needs goimports!"; exit 1; fi
 	go test -v
 
 # Build intermediate directories
-$(OUTDIR) $(OUTDIR)/containerize:
+$(OUTDIR) $(OUTDIR)/svc:
 	mkdir -p $@
 
 # Initialize database
@@ -34,15 +37,15 @@ $(OUTDIR)/orders.db: schema.sql | $(OUTDIR)
 	sqlite3 $@ < schema.sql
 
 # Compile the binary, place it into the output directory.
-$(OUTDIR)/containerize/orderservice: *.go Makefile | $(OUTDIR)/containerize
+$(OUTDIR)/svc/orderservice: *.go Makefile | $(OUTDIR)/svc
 	CGO_ENABLED=1 GOOS=linux go build -o $@
 
-$(OUTDIR)/containerize/Dockerfile: Dockerfile.template | $(OUTDIR)/containerize
+$(OUTDIR)/svc/Dockerfile: Dockerfile.template | $(OUTDIR)/svc
 	cp $< $@
 
 # This target builds the final deployable Docker image. We use a text file to
 # represent the Docker image because images aren't filesystem objects and Make
 # *only* knows about filesystem objects.
-$(OUTDIR)/image_name.txt: $(OUTDIR)/containerize/orderservice $(OUTDIR)/containerize/Dockerfile | $(OUTDIR)
-	docker build --tag $(IMAGE_NAME) $(OUTDIR)/containerize
+$(OUTDIR)/image_name.txt: $(OUTDIR)/svc/orderservice $(OUTDIR)/svc/Dockerfile | $(OUTDIR)
+	docker build --tag $(IMAGE_NAME) $(OUTDIR)/svc
 	echo $(IMAGE_NAME) > $@

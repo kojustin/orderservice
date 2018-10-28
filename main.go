@@ -1,4 +1,4 @@
-// Package main builds the OrderService application
+// Package kojustin/orderservice builds the OrderService application
 package main
 
 import (
@@ -20,6 +20,17 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 )
+
+const createOrderDetails = `{
+  "origin": [
+    "37.8093475",
+    "-122.2740787"
+  ],
+  "destination": [
+    "37.8061044",
+    "-122.2943356"
+  ]
+}`
 
 // HTTPResponseError is the common error response OrderService replies with to
 // its callers on errors
@@ -128,13 +139,13 @@ func (s *OrderService) Insert(details CreateOrderDetails) (*Order, error) {
 
 // List returns a listing of orders.
 func (s *OrderService) List(page int, limit int) ([]Order, error) {
-	rows, err := s.DB.Query("SELECT id, distance, status FROM orders")
+	rows, err := s.DB.Query("SELECT id, distance, status FROM orders LIMIT ? OFFSET ?", limit, page)
 	if err != nil {
 		return nil, fmt.Errorf("SELECT ... FROM failed: %s", err)
 	}
 	defer rows.Close()
 
-	var orders []Order
+	orders := []Order{}
 
 	for rows.Next() {
 		var id int64
@@ -229,10 +240,9 @@ func NewOrderService(db *sql.DB, mapsAPIKey string, ctx context.Context) (*Order
 	}
 
 	mux.HandleFunc("/orders/", func(w http.ResponseWriter, req *http.Request) {
-		fmt.Printf("req.URL.Path:%s, RequestURI:%s; method=%s\n", req.URL.Path, req.RequestURI, req.Method)
-
 		if req.Method != "PATCH" {
 			// Allow only PATCH. Otherwise, return 405 Method Not Allowed
+			fmt.Printf("Method:%s; Path:%s, 405\n", req.Method, req.URL.Path)
 			w.WriteHeader(405)
 			return
 		}
@@ -241,28 +251,34 @@ func NewOrderService(db *sql.DB, mapsAPIKey string, ctx context.Context) (*Order
 		if len(matches) != 2 {
 			// Only allow URLS like "/orders/ID" where ID is an integer.
 			// Otherwise, return 404 not found.
+			fmt.Printf("Method:%s; Path:%s, 404 no matches\n", req.Method, req.URL.Path)
 			w.WriteHeader(404)
 			return
 		}
 		orderID, err := strconv.ParseInt(matches[1], 10, 64)
 		if err != nil {
+			fmt.Printf("Method:%s; Path:%s, 400 invalid id\n", req.Method, req.URL.Path)
 			w.WriteHeader(400)
 			json.NewEncoder(w).Encode(HTTPResponseError{"INVALID ID"})
 			return
 		}
 		switch err = orderService.Take(orderID); err {
 		case errNoSuchOrder:
+			fmt.Printf("Method:%s; Path:%s, 404 no such order %d\n", req.Method, req.URL.Path, orderID)
 			w.WriteHeader(404)
 			return
 		case errTaken:
+			fmt.Printf("Method:%s; Path:%s, 409 order %d already taken\n", req.Method, req.URL.Path, orderID)
 			w.WriteHeader(409)
 			json.NewEncoder(w).Encode(HTTPResponseError{"ORDER_ALREADY_BEEN_TAKEN"})
 			return
 		case nil:
+			fmt.Printf("Method:%s; Path:%s, 200 order %d success\n", req.Method, req.URL.Path, orderID)
 			json.NewEncoder(w).Encode(HTTPResponseStatus{"SUCCESS"})
 			return
 		default:
-			fmt.Fprintf(os.Stderr, "failed orderService.Take() id=%d; err=%s", orderID, err)
+			fmt.Printf("Method:%s; Path:%s, 500 orderService.Take() %d failed: %s\n", req.Method, req.URL.Path,
+				orderID, err)
 			w.WriteHeader(500)
 			json.NewEncoder(w).Encode(HTTPResponseError{"INTERNAL_ERROR"})
 			return
@@ -270,9 +286,8 @@ func NewOrderService(db *sql.DB, mapsAPIKey string, ctx context.Context) (*Order
 	})
 
 	mux.HandleFunc("/orders", func(w http.ResponseWriter, req *http.Request) {
-		fmt.Printf("req.URL.Path:%s, RequestURI:%s; method=%s\n", req.URL.Path, req.RequestURI, req.Method)
-
 		if req.URL.Path != "/orders" {
+			fmt.Printf("Method:%s; Path:%s, 404\n", req.Method, req.URL.Path)
 			w.WriteHeader(404)
 			return
 		}
@@ -282,17 +297,20 @@ func NewOrderService(db *sql.DB, mapsAPIKey string, ctx context.Context) (*Order
 			// default values.
 			page, limit, err := parseQueryParametersForList(req.URL.Query())
 			if err != nil {
+				fmt.Printf("Method:%s; Path:%s, 400 invalid params\n", req.Method, req.URL.Path)
 				w.WriteHeader(400)
 				json.NewEncoder(w).Encode(HTTPResponseError{Error: "INVALID_PARAMETERS"})
 				return
 			}
 			orders, err := orderService.List(page, limit)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed orderService.List(): %s\n", err)
+				fmt.Printf("Method:%s; Path:%s, 501 failed orderService.List(): %s\n",
+					req.Method, req.URL.Path, err)
 				w.WriteHeader(501)
 				json.NewEncoder(w).Encode(HTTPResponseError{Error: "INTERNAL_FAILURE"})
 				return
 			}
+			fmt.Printf("Method:%s; Path:%s, 200 page=%d limit=%d\n", req.Method, req.URL.Path, page, limit)
 			w.WriteHeader(200)
 			json.NewEncoder(w).Encode(orders)
 			return
@@ -302,29 +320,34 @@ func NewOrderService(db *sql.DB, mapsAPIKey string, ctx context.Context) (*Order
 
 			details, err := parseCreateOrderDetails(buf.String())
 			if err != nil {
+				fmt.Printf("Method:%s; Path:%s, 400 parseCreateOrderDetails(): %s\n",
+					req.Method, req.URL.Path, err)
 				w.WriteHeader(400)
 				json.NewEncoder(w).Encode(HTTPResponseError{Error: err.Error()})
 				return
 			}
 			order, err := orderService.Insert(*details)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed orderService.Insert(): %s\n", err)
+				fmt.Printf("Method:%s; Path:%s, 501 orderService.Insert(): %s\n", req.Method, req.URL.Path, err)
 				w.WriteHeader(501)
 				json.NewEncoder(w).Encode(HTTPResponseError{Error: "INTERNAL_FAILURE"})
 				return
 			}
+			fmt.Printf("Method:%s; Path:%s, 200 post order success %+v\n", req.Method, req.URL.Path, order)
 			json.NewEncoder(w).Encode(order)
 			return
 		default:
+			fmt.Printf("Method:%s; Path:%s, 400 invalid params \n", req.Method, req.URL.Path)
 			w.WriteHeader(400)
 			json.NewEncoder(w).Encode(HTTPResponseError{Error: "INVALID_PARAMETERS"})
 			return
 		}
 	})
 
-	// Default handler.
 	mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
+		fmt.Printf("Method:%s; Path:%s, 400 default handler\n", req.Method, req.URL.Path)
 		w.WriteHeader(400)
+		return
 	})
 
 	return orderService, nil
@@ -348,7 +371,7 @@ func parseQueryParametersForList(qparams url.Values) (int, int, error) {
 		}
 	}
 	if len(qparams["limit"]) == 1 {
-		page, err = strconv.Atoi(qparams["limit"][0])
+		limit, err = strconv.Atoi(qparams["limit"][0])
 		if err != nil {
 			return page, limit, err
 		}
@@ -356,7 +379,7 @@ func parseQueryParametersForList(qparams url.Values) (int, int, error) {
 	return page, limit, nil
 }
 
-// parseCreateOrderDetails
+// parseCreateOrderDetails returns non-nil error on failure
 func parseCreateOrderDetails(input string) (*CreateOrderDetails, error) {
 	var details CreateOrderDetails
 	if err := json.NewDecoder(strings.NewReader(input)).Decode(&details); err != nil {
@@ -380,6 +403,7 @@ func orderServiceMain() error {
 	var (
 		ctx    = context.Background()
 		dbpath = flag.String("dbpath", "", "Path to database")
+		port   = flag.Int("port", 8080, "Port number to listen on")
 	)
 	flag.Parse()
 
@@ -390,7 +414,6 @@ func orderServiceMain() error {
 	if err != nil {
 		return fmt.Errorf("failed to open sqlite3 database (%s) : %s", *dbpath, err)
 	}
-	fmt.Printf("opened db.\n")
 	defer db.Close()
 
 	mapsAPIKey, ok := os.LookupEnv("GOOGLE_MAPS_API_KEY")
@@ -406,7 +429,7 @@ func orderServiceMain() error {
 		return fmt.Errorf("failed to create OrderService: %s", err)
 	}
 
-	server := &http.Server{Addr: ":8080", Handler: orderService}
+	server := &http.Server{Addr: fmt.Sprintf(":%d", *port), Handler: orderService}
 
 	go func() {
 		for _ = range c {
@@ -418,9 +441,10 @@ func orderServiceMain() error {
 
 	// Serve traffic. If we were closed by a graceful shutdown (e.g. caught
 	// a Ctrl+C) don't return an error.
+	fmt.Printf("Listening.")
 	serveErr := server.ListenAndServe()
 	if serveErr == http.ErrServerClosed {
-		fmt.Fprintf(os.Stdout, "shutdown.\n")
+		fmt.Fprintf(os.Stdout, "\nSignal caught, exiting.\n")
 		return nil
 	}
 	return serveErr

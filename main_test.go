@@ -1,7 +1,10 @@
+// +build !integ
+
 package main
 
 import (
 	"encoding/json"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -59,17 +62,6 @@ const gmapsResponse = `{
   } ]
 }`
 
-const createOrderDetails = `{
-  "origin": [
-    "37.8093475",
-    "-122.2740787"
-  ],
-  "destination": [
-    "37.8061044",
-    "-122.2943356"
-  ]
-}`
-
 func TestDeserializeGoogleMapsResponse(t *testing.T) {
 	var response GoogleMapsResponse
 	err := json.NewDecoder(strings.NewReader(gmapsResponse)).Decode(&response)
@@ -98,4 +90,26 @@ func TestDeserializeCreateOrderDetails(t *testing.T) {
 	}
 	t.Logf("details=%+v", details)
 
+}
+
+func TestParseQueryParametersForList(t *testing.T) {
+	qparams := url.Values{}
+	qparams["page"] = []string{"3"}
+	qparams["limit"] = []string{"5"}
+
+	p, l, err := parseQueryParametersForList(qparams)
+	if err != nil {
+		t.Error(err)
+	}
+	if p != 3 {
+		t.Error(p)
+	}
+	if l != 5 {
+		t.Error(l)
+	}
+
+	p, l, err = parseQueryParametersForList(url.Values{})
+	if p != 0 || l != 50 || err != nil {
+		t.Error(p, l, err)
+	}
 }

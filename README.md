@@ -8,7 +8,7 @@ orders and exposes an API as an HTTP service. **Run it like this:**
 `start.sh` is idempotent.
 
 The application needs a Google Maps key to be able to perform requests. When
-running the application, set the environment variable GOOGLE_MAPS_API_KEY to
+running the application, set the environment variable `GOOGLE_MAPS_API_KEY` to
 the value of the Google Maps Cloud Platform API Key, suitable for use
 with the [distance matrix API][matrixapi].
 
@@ -31,11 +31,24 @@ To iterate quickly:
         make artifacts/containerize/orderservice artifacts/orders.db && \
         artifacts/containerize/orderservice -dbpath artifacts/orders.db
 
-## Interactive Tests
+## Tests
 
 Add interactive test functions to your bash shell.
 
     source test/repl.sh
+
+Run integration test. This runs the server and then a separate process runs
+tests against the server.
+
+    # In shell 1. Re-run this after each run of the integ test.
+    rm artifacts/orders.db && make artifacts/orders.db artifacts/svc/orderservice && \
+      artifacts/svc/orderservice -dbpath artifacts/orders.db -port 8081
+    # In shell 2:
+    go test -tags integ
+
+Line count
+
+    find . -type f  -not -path "./.git/*" -not -path "./.idea/*" -not -path "./.vagrant/*" -not -path "./artifacts/*" -not -name ubuntu-bionic-18.04-cloudimg-console.log | xargs wc -l
 
 #### Caesar Says
 
