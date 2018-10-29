@@ -13,6 +13,11 @@ dbpath=artifacts/orders.db
 # Name of the Docker container that runs the service.
 cname=ordersvc
 
+if [[ -z "$GOOGLE_MAPS_API_KEY" ]]; then
+  echo "ERROR: GOOGLE_MAPS_API_KEY is unset, application will not work."
+  exit 1
+fi
+
 # Install apt packages.
 sudo apt-get update
 sudo apt install --yes gcc jq make sqlite3 tmux
@@ -114,10 +119,6 @@ fi
 #
 # Run the Docker image.
 #
-if [[ -z "$GOOGLE_MAPS_API_KEY" ]]; then
-  echo "ERROR: GOOGLE_MAPS_API_KEY is unset, application will not work."
-  exit 1
-fi
 
 dbbasename="$(basename $dbpath)"
 internalpath="/data/$dbbasename"
