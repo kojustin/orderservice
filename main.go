@@ -88,13 +88,13 @@ type OrderService struct {
 	*http.ServeMux         // Embedded HTTP server object, implements http.Handler.
 	*sql.DB                // Embedded SQL database connection.
 	context.Context        // Context for cancelling and stuff.
+	*http.Client           // HTTP Client
 }
 
 // Insert adds a new entry to the database. origin and destination must be
 // URL-encoded strings.
 func (s *OrderService) Insert(details CreateOrderDetails) (*Order, error) {
 	var (
-		client = &http.Client{Timeout: 3 * time.Second}
 		encode = func(input []string) string {
 			return fmt.Sprintf("%s,%s", url.QueryEscape(input[0]), url.QueryEscape(input[1]))
 		}
@@ -104,24 +104,37 @@ func (s *OrderService) Insert(details CreateOrderDetails) (*Order, error) {
 
 	url := fmt.Sprintf("https://maps.googleapis.com/maps/api/distancematrix/json?origins=%s&destinations=%s&key=%s",
 		origin, destination, s.mapsAPIKey)
-	response, err := client.Get(url)
+	response, err := s.Client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed http.Client{}.Get() url=%s: %s", url, err)
 	}
 	defer response.Body.Close()
 
-	var buf bytes.Buffer
-	io.Copy(&buf, response.Body)
-
-	fmt.Printf("Insert got response: %d. %s\n", response.StatusCode, buf.String())
+	debug := false
+	var rdr io.Reader = response.Body
+	if debug {
+		var buf bytes.Buffer
+		io.Copy(&buf, response.Body)
+		fmt.Printf("Insert got response: %d. %s\n", response.StatusCode, buf.String())
+		rdr = strings.NewReader(buf.String())
+	}
 
 	var mapResponse GoogleMapsResponse
-	if err := json.NewDecoder(strings.NewReader(buf.String())).Decode(&mapResponse); err != nil {
+	if err := json.NewDecoder(rdr).Decode(&mapResponse); err != nil {
 		return nil, fmt.Errorf("unable to decode response: %s", err)
 	}
 
+	if len(mapResponse.Rows) == 0 {
+		return nil, fmt.Errorf("Google Maps response missing rows")
+	}
+	firstRow := mapResponse.Rows[0]
+	if len(firstRow.Elements) == 0 {
+		return nil, fmt.Errorf("Google Maps response missing rows.elements")
+	}
+	firstElement := firstRow.Elements[0]
+
 	rowResult, err := s.DB.Exec("INSERT INTO orders (distance, status) values(?, ?)",
-		mapResponse.Rows[0].Elements[0].Distance.Value, string(StateUnassigned))
+		firstElement.Distance.Value, string(StateUnassigned))
 	if err != nil {
 		return nil, fmt.Errorf("unable to insert: %s", err)
 	}
@@ -132,7 +145,7 @@ func (s *OrderService) Insert(details CreateOrderDetails) (*Order, error) {
 
 	return &Order{
 		Id:       lastId,
-		Distance: float64(mapResponse.Rows[0].Elements[0].Distance.Value),
+		Distance: float64(firstElement.Distance.Value),
 		State:    StateUnassigned,
 	}, nil
 }
@@ -232,7 +245,7 @@ var _ http.Handler = &OrderService{}
 // NewOrderService creates a new OrderService object, registers handlers.
 func NewOrderService(db *sql.DB, mapsAPIKey string, ctx context.Context) (*OrderService, error) {
 	mux := http.NewServeMux()
-	orderService := &OrderService{mapsAPIKey: mapsAPIKey, ServeMux: mux, DB: db, Context: ctx}
+	orderService := &OrderService{mapsAPIKey: mapsAPIKey, ServeMux: mux, DB: db, Context: ctx, Client: &http.Client{Timeout: 3 * time.Second}}
 
 	patchPathRE, err := regexp.Compile("^/orders/(?P<orderID>[[:digit:]]*)$")
 	if err != nil {
@@ -244,6 +257,7 @@ func NewOrderService(db *sql.DB, mapsAPIKey string, ctx context.Context) (*Order
 			// Allow only PATCH. Otherwise, return 405 Method Not Allowed
 			fmt.Printf("Method:%s; Path:%s, 405\n", req.Method, req.URL.Path)
 			w.WriteHeader(405)
+			json.NewEncoder(w).Encode(HTTPResponseError{"DISALLOWED_METHOD"})
 			return
 		}
 
@@ -253,19 +267,21 @@ func NewOrderService(db *sql.DB, mapsAPIKey string, ctx context.Context) (*Order
 			// Otherwise, return 404 not found.
 			fmt.Printf("Method:%s; Path:%s, 404 no matches\n", req.Method, req.URL.Path)
 			w.WriteHeader(404)
+			json.NewEncoder(w).Encode(HTTPResponseError{"NO_SUCH_ORDER"})
 			return
 		}
 		orderID, err := strconv.ParseInt(matches[1], 10, 64)
 		if err != nil {
 			fmt.Printf("Method:%s; Path:%s, 400 invalid id\n", req.Method, req.URL.Path)
 			w.WriteHeader(400)
-			json.NewEncoder(w).Encode(HTTPResponseError{"INVALID ID"})
+			json.NewEncoder(w).Encode(HTTPResponseError{"INVALID_ORDER_ID"})
 			return
 		}
 		switch err = orderService.Take(orderID); err {
 		case errNoSuchOrder:
 			fmt.Printf("Method:%s; Path:%s, 404 no such order %d\n", req.Method, req.URL.Path, orderID)
 			w.WriteHeader(404)
+			json.NewEncoder(w).Encode(HTTPResponseError{"NO_SUCH_ORDER"})
 			return
 		case errTaken:
 			fmt.Printf("Method:%s; Path:%s, 409 order %d already taken\n", req.Method, req.URL.Path, orderID)
@@ -274,6 +290,7 @@ func NewOrderService(db *sql.DB, mapsAPIKey string, ctx context.Context) (*Order
 			return
 		case nil:
 			fmt.Printf("Method:%s; Path:%s, 200 order %d success\n", req.Method, req.URL.Path, orderID)
+			w.WriteHeader(200)
 			json.NewEncoder(w).Encode(HTTPResponseStatus{"SUCCESS"})
 			return
 		default:
@@ -289,6 +306,7 @@ func NewOrderService(db *sql.DB, mapsAPIKey string, ctx context.Context) (*Order
 		if req.URL.Path != "/orders" {
 			fmt.Printf("Method:%s; Path:%s, 404\n", req.Method, req.URL.Path)
 			w.WriteHeader(404)
+			json.NewEncoder(w).Encode(HTTPResponseError{"INVALID_PATH"})
 			return
 		}
 
@@ -304,9 +322,9 @@ func NewOrderService(db *sql.DB, mapsAPIKey string, ctx context.Context) (*Order
 			}
 			orders, err := orderService.List(page, limit)
 			if err != nil {
-				fmt.Printf("Method:%s; Path:%s, 501 failed orderService.List(): %s\n",
+				fmt.Printf("Method:%s; Path:%s, 500 failed orderService.List(): %s\n",
 					req.Method, req.URL.Path, err)
-				w.WriteHeader(501)
+				w.WriteHeader(500)
 				json.NewEncoder(w).Encode(HTTPResponseError{Error: "INTERNAL_FAILURE"})
 				return
 			}
@@ -328,12 +346,13 @@ func NewOrderService(db *sql.DB, mapsAPIKey string, ctx context.Context) (*Order
 			}
 			order, err := orderService.Insert(*details)
 			if err != nil {
-				fmt.Printf("Method:%s; Path:%s, 501 orderService.Insert(): %s\n", req.Method, req.URL.Path, err)
-				w.WriteHeader(501)
+				fmt.Printf("Method:%s; Path:%s, 500 orderService.Insert(): %s\n", req.Method, req.URL.Path, err)
+				w.WriteHeader(500)
 				json.NewEncoder(w).Encode(HTTPResponseError{Error: "INTERNAL_FAILURE"})
 				return
 			}
 			fmt.Printf("Method:%s; Path:%s, 200 post order success %+v\n", req.Method, req.URL.Path, order)
+			w.WriteHeader(200)
 			json.NewEncoder(w).Encode(order)
 			return
 		default:
@@ -345,8 +364,9 @@ func NewOrderService(db *sql.DB, mapsAPIKey string, ctx context.Context) (*Order
 	})
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
-		fmt.Printf("Method:%s; Path:%s, 400 default handler\n", req.Method, req.URL.Path)
-		w.WriteHeader(400)
+		fmt.Printf("Method:%s; Path:%s, 404 default handler\n", req.Method, req.URL.Path)
+		w.WriteHeader(404)
+		json.NewEncoder(w).Encode(HTTPResponseError{"INVALID_PATH"})
 		return
 	})
 

@@ -45,7 +45,3 @@ tests against the server.
       artifacts/svc/orderservice -dbpath artifacts/orders.db -port 8081
     # In shell 2:
     go test -tags integ
-
-#### Caesar Says
-
-Ynynzbir Punyyratr in Latin is ...
