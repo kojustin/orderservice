@@ -56,7 +56,7 @@ func TestIntegration(t *testing.T) {
 	// Insert a bunch of journeys that are not exactly the same.
 	originLat := 37.8093475    // North-South
 	originLong := -122.2740787 // East-West
-	for idx := 0; idx < 6; idx++ {
+	for idx := 0; idx < 14; idx++ {
 
 		newLat := originLat + (float64(idx) * 0.02)
 		newLong := originLong - (float64(idx) * 0.02)

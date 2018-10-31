@@ -109,7 +109,7 @@ func TestParseQueryParametersForList(t *testing.T) {
 	}
 
 	p, l, err = parseQueryParametersForList(url.Values{})
-	if p != 0 || l != 50 || err != nil {
+	if p != 1 || l != 10 || err != nil {
 		t.Error(p, l, err)
 	}
 }

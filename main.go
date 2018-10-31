@@ -151,8 +151,10 @@ func (s *OrderService) Insert(details CreateOrderDetails) (*Order, error) {
 }
 
 // List returns a listing of orders.
+//
+// Limit is the number of orders on a page. page is 1-indexed.
 func (s *OrderService) List(page int, limit int) ([]Order, error) {
-	rows, err := s.DB.Query("SELECT id, distance, status FROM orders LIMIT ? OFFSET ?", limit, page)
+	rows, err := s.DB.Query("SELECT id, distance, status FROM orders LIMIT ? OFFSET ?", limit, (page-1)*limit)
 	if err != nil {
 		return nil, fmt.Errorf("SELECT ... FROM failed: %s", err)
 	}
@@ -253,7 +255,7 @@ func NewOrderService(db *sql.DB, mapsAPIKey string, ctx context.Context) (*Order
 	}
 
 	mux.HandleFunc("/orders/", func(w http.ResponseWriter, req *http.Request) {
-		if req.Method != "PATCH" {
+		if req.Method != http.MethodPatch {
 			// Allow only PATCH. Otherwise, return 405 Method Not Allowed
 			fmt.Printf("Method:%s; Path:%s, 405\n", req.Method, req.URL.Path)
 			w.WriteHeader(405)
@@ -311,7 +313,7 @@ func NewOrderService(db *sql.DB, mapsAPIKey string, ctx context.Context) (*Order
 		}
 
 		switch req.Method {
-		case "GET":
+		case http.MethodGet:
 			// default values.
 			page, limit, err := parseQueryParametersForList(req.URL.Query())
 			if err != nil {
@@ -332,7 +334,7 @@ func NewOrderService(db *sql.DB, mapsAPIKey string, ctx context.Context) (*Order
 			w.WriteHeader(200)
 			json.NewEncoder(w).Encode(orders)
 			return
-		case "POST":
+		case http.MethodPost:
 			var buf bytes.Buffer
 			io.Copy(&buf, req.Body)
 
@@ -376,24 +378,36 @@ func NewOrderService(db *sql.DB, mapsAPIKey string, ctx context.Context) (*Order
 // On failure returns on errors. On success returns the "page" (first) and
 // "limit" (second) parameters. Will provide default values for "page" and
 // "limit" if no query parameters are provided.
-func parseQueryParametersForList(qparams url.Values) (int, int, error) {
+//
+// page is 1-indexed and always >= 1.
+func parseQueryParametersForList(queryParams url.Values) (int, int, error) {
 	// default values.
-	var page int = 0
-	var limit int = 50
+	var page int = 1
+	var limit int = 10
 	var err error
-	if len(qparams["page"]) > 1 || len(qparams["limit"]) > 1 {
+	if len(queryParams["page"]) > 1 || len(queryParams["limit"]) > 1 {
 		return page, limit, err
 	}
-	if len(qparams["page"]) == 1 {
-		page, err = strconv.Atoi(qparams["page"][0])
+	if len(queryParams["page"]) == 1 {
+		pp, err := strconv.Atoi(queryParams["page"][0])
 		if err != nil {
 			return page, limit, err
 		}
+		if pp < 1 {
+			return page, limit, err
+		} else {
+			page = pp
+		}
 	}
-	if len(qparams["limit"]) == 1 {
-		limit, err = strconv.Atoi(qparams["limit"][0])
+	if len(queryParams["limit"]) == 1 {
+		ll, err := strconv.Atoi(queryParams["limit"][0])
 		if err != nil {
 			return page, limit, err
+		}
+		if ll < 0 {
+			return page, limit, err
+		} else {
+			limit = ll
 		}
 	}
 	return page, limit, nil
@@ -461,7 +475,7 @@ func orderServiceMain() error {
 
 	// Serve traffic. If we were closed by a graceful shutdown (e.g. caught
 	// a Ctrl+C) don't return an error.
-	fmt.Printf("Listening.")
+	fmt.Printf("Listening.\n")
 	serveErr := server.ListenAndServe()
 	if serveErr == http.ErrServerClosed {
 		fmt.Fprintf(os.Stdout, "\nSignal caught, exiting.\n")
